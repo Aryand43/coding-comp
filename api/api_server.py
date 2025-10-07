@@ -8,19 +8,12 @@ import sys
 import os
 import json
 
-# Add parent directory to path to import grader
+# Add parent directory to path to import grader and database
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from grader import grade_submission
+from database import init_db, create_user, verify_user, save_submission, get_leaderboard_data
 
 app = FastAPI()
-
-# Load existing submissions from file
-leaderboard_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "leaderboard.json")
-if os.path.exists(leaderboard_file):
-    with open(leaderboard_file, "r") as f:
-        submissions = json.load(f)
-else:
-    submissions = []
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,14 +22,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+async def startup_event():
+    """Initializes the database on application startup."""
+    init_db()
+
 class Submission(BaseModel):
     user_id: str
     problem_id: str
     code: str
 
+class SignupRequest(BaseModel):
+    username: str
+    email: str
+    password: str
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
 @app.get("/")
 async def root():
-    return {"message": "Coding Challenge API is running!"}
+    return {"message": "Coding Challenge API is running!", "status": "ok"}
+
+@app.post("/signup")
+async def signup(request: SignupRequest):
+    """User signup"""
+    result = create_user(request.username, request.email, request.password)
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+@app.post("/login")
+async def login(request: LoginRequest):
+    """User login"""
+    result = verify_user(request.username, request.password)
+    if not result["success"]:
+        raise HTTPException(status_code=401, detail=result["error"])
+    return result
 
 @app.post("/submit")
 async def submit_code(submission: Submission):
@@ -45,63 +68,31 @@ async def submit_code(submission: Submission):
     if not os.path.exists(test_case_path):
         raise HTTPException(status_code=404, detail="Problem test cases not found")
 
-    with open(test_case_path, "r") as f:
-        test_data = json.load(f)
-
-    # grade submission
+    # Grade submission
     result = grade_submission(
         code=submission.code,
         problem_id=submission.problem_id,
         user_id=submission.user_id
     )
 
-    # add to leaderboard
+    # Save to database
     submission_entry = result["submission_entry"]
-    submission_entry["replay_result"] = f"{result['score']}/{result['total']} tests passed"
-    submission_entry["timestamp"] = datetime.now().isoformat()
-
-    global submissions
-    # update leaderboard (replace if better)
-    existing = next((entry for entry in submissions
-                     if entry["user_id"] == submission.user_id and entry["problem_id"] == submission.problem_id), None)
-
-    if existing:
-        if submission_entry["score"] > existing["score"]:
-            submissions = [s for s in submissions if s != existing]
-            submissions.append(submission_entry)
-    else:
-        submissions.append(submission_entry)
-
-    with open(leaderboard_file, "w") as f:
-        json.dump(submissions, f, indent=2, default=str)
+    submission_entry["timestamp"] = datetime.now() # Ensure timestamp is a datetime object
+    
+    save_result = save_submission(submission_entry)
+    if not save_result["success"]:
+        raise HTTPException(status_code=500, detail=f"Database error: {save_result['error']}")
 
     return {"grade": result, "leaderboard_entry": submission_entry}
 
-
 @app.get("/leaderboard")
 async def get_leaderboard():
-    if not submissions:
-        return {"leaderboard": []}
-
-    # Sort by score (descending), then by timestamp (ascending)
-    sorted_subs = sorted(submissions, key=lambda x: (-x["score"], x["timestamp"]))
-
-    leaderboard = []
-    seen = set()
-
-    for entry in sorted_subs:
-        uid = entry["user_id"]
-        # Keep only the best/latest score per user
-        if uid not in seen:
-            leaderboard.append({
-                "user_id": uid,
-                "score": entry["score"],
-                "replay_result": entry["replay_result"],
-                "timestamp": entry["timestamp"]
-            })
-            seen.add(uid)
-
-    return {"leaderboard": leaderboard}
+    """Get current leaderboard standings from the database"""
+    result = get_leaderboard_data()
+    if not result["success"]:
+        raise HTTPException(status_code=500, detail=f"Database error: {result['error']}")
+        
+    return {"leaderboard": result["leaderboard"]}
 
 @app.get("/problems")
 def list_problems():
