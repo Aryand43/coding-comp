@@ -16,7 +16,7 @@ const API_BASE = (() => {
     return "http://127.0.0.1:8000";
   }
   // Otherwise use /api for production
-  return "/api";
+  return ""; // CHANGE: The root path is correct, not /api
 })();
 
 console.log("API_BASE set to:", API_BASE);
@@ -38,6 +38,7 @@ document.getElementById("loginBtn").addEventListener("click", async () => {
   const password = document.getElementById("loginPassword").value;
 
   try {
+    // CHANGE: Call the correct endpoint directly
     const response = await fetch(`${API_BASE}/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -72,6 +73,7 @@ document.getElementById("signupBtn").addEventListener("click", async () => {
   }
 
   try {
+    // CHANGE: Call the correct endpoint directly
     const response = await fetch(`${API_BASE}/signup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
